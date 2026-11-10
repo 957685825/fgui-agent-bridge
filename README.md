@@ -2,7 +2,8 @@
 
 通过 MCP (Model Context Protocol) 或 CLI，让 AI 编程 Agent（如 Cursor、Claude、Codex、VS Code 等）以结构化指令直接操作 FairyGUI Editor，实现自动拼 UI 界面、动效制作与一键发布。
 
-- **版本**：`0.9.7`
+- **版本**：[`0.9.7`](https://github.com/957685825/fgui-agent-bridge/releases/tag/v0.9.7)
+- **版本更新**：[完整更新记录](CHANGELOG.md) · [GitHub Releases](https://github.com/957685825/fgui-agent-bridge/releases)
 - **队列协议**：`1.0`
 - **已验证 FairyGUI Editor**：`6.1.4`
 - **通信方式**：本地 JSON 队列 + MCP stdio
@@ -373,7 +374,7 @@ uv run python -m unittest discover -s tests -v
 git diff --check
 ```
 
-每次维护先修改源码，再同步受影响的 MCP / CLI、测试、Skill、README 和 [更新记录](CHANGELOG.md)。插件行为变化时同步版本与编译文件；检查生成文件未漂移、回归通过后提交并推送本仓库。编辑器实测使用隔离工程，报告已验证和未验证范围；单个界面通过不代表全部皮肤通用。不要上传业务工程、美术资源、运行队列、日志、凭据、缓存或个人路径。欢迎通过本仓库的 Issue / Pull Request 参与修改。
+每次维护先修改源码，再同步受影响的 MCP / CLI、测试、Skill、README 和 [更新记录](CHANGELOG.md)。插件行为变化时同步版本与编译文件；检查生成文件未漂移、回归通过后提交并推送本仓库。每次版本升级还需创建与对应提交匹配的 `v版本号` 标签及 GitHub Release，发布说明列出变更、升级步骤、验证结果和已知限制，并核对远程页面；仅推送代码不算完成版本发布。编辑器实测使用隔离工程，报告已验证和未验证范围；单个界面通过不代表全部皮肤通用。不要上传业务工程、美术资源、运行队列、日志、凭据、缓存或个人路径。欢迎通过本仓库的 Issue / Pull Request 参与修改。
 
 > **维护注意**：修改 `plugin/main.ts` 后必须重新生成并提交 `plugin/main.js`；版本升级需同步修改 `plugin/package.json`、`pyproject.toml`、Python `__version__` 以及插件源码版本号。
 
