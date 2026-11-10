@@ -11,6 +11,7 @@ from typing import Any
 from .bridge_client import BridgeClient, BridgeError
 from .editor_launcher import EditorLauncher
 from .project_locator import ProjectLocator
+from .layout_snapshot import encode_snapshot_png
 
 
 def load_json_value(value: str) -> Any:
@@ -205,6 +206,10 @@ def build_parser() -> argparse.ArgumentParser:
     tree_parser = subparsers.add_parser("tree", help="读取当前组件对象树")
     tree_parser.add_argument("--max-depth", type=int, default=12)
 
+    layout_parser = subparsers.add_parser("layout", help="读取当前组件布局；可导出原生 PNG 预览，不保存文档")
+    layout_parser.add_argument("--max-depth", type=int, default=12)
+    layout_parser.add_argument("--output", help="预览 PNG 路径；省略时只读取布局，拒绝覆盖已有文件")
+
     select_parser = subparsers.add_parser("select", help="选择对象")
     _add_target_arguments(select_parser)
 
@@ -244,7 +249,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("undo", help="撤销")
     subparsers.add_parser("redo", help="重做")
 
-    update_parser = subparsers.add_parser("update", help="从源仓库拉取最新代码并同步插件与 Skill 到工程")
+    update_parser = subparsers.add_parser("update", help="从源仓库拉取最新代码并同步全局插件与 Skill")
     update_parser.add_argument(
         "--pull",
         action="store_true",
@@ -270,7 +275,6 @@ def main() -> int:
             return 0
 
         if args.command == "update":
-            context = locator.resolve()
             repo_root = Path(__file__).resolve().parents[2]
             if str(repo_root) not in sys.path:
                 sys.path.insert(0, str(repo_root))
@@ -290,8 +294,8 @@ def main() -> int:
                 perform_sync = mod.perform_sync
 
             perform_sync(
-                project_value=str(context.project_file),
                 skill_root_value=args.skill_root,
+                global_plugin=True,
                 apply=args.apply,
                 pull=args.pull,
                 repo_root=repo_root,
@@ -472,6 +476,15 @@ def main() -> int:
         elif args.command == "tree":
             action = "get_tree"
             params = {"maxDepth": args.max_depth}
+        elif args.command == "layout":
+            if not 0 <= args.max_depth <= 64:
+                raise ValueError("max-depth 必须在 0 到 64 之间")
+            if args.output:
+                output = Path(args.output).expanduser().resolve()
+                if output.suffix.lower() != ".png" or output.exists() or not output.parent.is_dir():
+                    raise ValueError("output 必须是父目录已存在、尚未使用的 PNG 路径")
+            action = "get_layout_snapshot"
+            params = {"maxDepth": args.max_depth, "includeImage": bool(args.output)}
         elif args.command == "select":
             action = "select_object"
             params = {"target": target_from_args(args)}
@@ -524,6 +537,13 @@ def main() -> int:
             params = decoded
 
         response = client.call_raw(action, params, timeout=command_timeout)
+        if args.command == "layout" and response.get("ok") and args.output:
+            result = response["result"]
+            png = encode_snapshot_png(result.pop("capture", {}))
+            # 独占创建，避免原生截图等待期间出现的同名文件被覆盖。
+            with output.open("xb") as stream:
+                stream.write(png)
+            result["imagePath"] = str(output)
         print_result(response)
         return 0 if response.get("ok") else 1
     except (BridgeError, OSError, TimeoutError, ValueError, json.JSONDecodeError) as exc:

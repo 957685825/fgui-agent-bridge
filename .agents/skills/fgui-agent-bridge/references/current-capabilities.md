@@ -1,18 +1,21 @@
 # Agent Bridge 当前能力参考
 
-> 这是独立 `fgui-agent-bridge` 仓库在 2026-08-19 的能力快照。功能变动时必须同步本文件，并以源码实际签名为最终依据。
+> 这是独立 `fgui-agent-bridge` 仓库在 2026-11-09 的能力快照。功能变动时必须同步本文件，并以源码实际签名为最终依据。
 
 ## 版本与通道
 
-- Bridge 版本：`0.8.1`
+- Bridge 版本：`0.9.6`
 - FairyGUI 插件 ID：`com.fgui.agent-bridge`
-- 代码真源：独立公开仓库；业务工程只安装插件与 Skill 快照
+- 代码真源：独立公开仓库；插件安装在 `~/.config/FairyGUI-Editor/plugins/agent-bridge/`，业务工程只按需安装 Skill 快照
 - 队列协议：`1.0`
 - FairyGUI Editor 基线：`6.1.4`
-- MCP 工具数：38，其中 36 个对应 Bridge Action，`fgui_status` 和 `fgui_use_project` 为 Python 本地能力
+- MCP 工具数：39，其中 37 个对应 Bridge Action，`fgui_status` 和 `fgui_use_project` 为 Python 本地能力
 - 传输：MCP stdio；底层为目标工程 `.agent/` 下的本地 JSON 文件队列
 - 运行时目录：`.agent/requests`、`.agent/processing`、`.agent/responses`、`.agent/status.json`、`.agent/bridge.log`
 - `.agent/` 是运行时数据，不纳入 Git
+- 0.9.3 输入状态保护：请求成功/失败或窗口重新获得焦点后，等前台且真实按键/鼠标释放并空闲 0.5 秒，调用宿主原生接口恢复一次输入；不改文档、选择或焦点，不在心跳中反复恢复。慢响应期间心跳正常则不再额外激活编辑器。真实编辑器手工复现尚待验收，不能据此宣称漏收 KeyUp 的根因已证实。
+
+- 0.9.5 修复布局快照锚点偏移和原生预览继承编辑器视口裁切；坐标基于显示对象变换，离屏绘制刷新后截图，成功/失败均恢复裁切状态。真实 Editor 多组件回归与自动化结果见下表。
 
 ## MCP 工具签名
 
@@ -30,6 +33,7 @@
 | `fgui_create_movieclip` | 包、名称、有序 `frame_paths`、FPS、延迟、Swing、目录 | 从本地图片序列创建/替换 MovieClip |
 | `fgui_get_movieclip` / `fgui_update_movieclip` / `fgui_remove_movieclip` | MovieClip 资源定位；更新可传帧、FPS、Speed、延迟、Swing | 读取、更新或显式强制删除 MovieClip |
 | `fgui_get_active_document` / `fgui_get_tree` | 无 / `max_depth` | 读取活动文档或对象树 |
+| `fgui_get_layout_snapshot` | `max_depth=12`, `include_image=True` | 当前根画布坐标、字体、Controller、设计图与原生 PNG；不切换或保存，详见 Skill 2.2 |
 | `fgui_select_object` / `fgui_set_property` | ID、路径或唯一名称 | 选择对象或修改白名单属性 |
 | `fgui_insert_object` / `fgui_remove_object` | 资源 URL、坐标 / 目标 | 插入已有资源或删除非根对象 |
 | `fgui_list_transitions` / `fgui_get_transition` | 无 / `name` | 读取当前组件的 Transition |
@@ -70,11 +74,33 @@
 - `fgui_save_document` / `fgui_save_all` 保存文档和包改动；`fgui_discard_document` 只放弃当前文档未保存改动。
 - 发布前先用 `fgui_get_publish_settings`。发布期间桥接会阻止资源、动画及文档写操作。
 
+## 编辑器公共包同步
+
+- 全局插件一次安装后服务当前用户打开的所有 FairyGUI 工程；工程内不再保留同 ID 插件副本。
+- “工具”菜单在每个工程中提供当前工程和全部已接入工程两个同步入口。
+- 公共包真源按当前工程祖先目录中最高层的 `assets/ju_common` 定位；同步包为 `ju_common` 与存在时的 `ju_common_coins`。
+- 当前工程同步会安装缺失包；全部同步只处理已存在任一公共包的 `.fairy` 工程，并为这些工程补齐两个公共包。
+- 每个目标包通过同级临时目录完整复制后切换，真源不存在的目标遗留文件会被清理；切换失败时恢复原目录。
+- 有未保存文档时拒绝同步；成功后执行 FairyGUI 工程刷新。该能力是 Editor 菜单能力，不新增 MCP 工具或 Bridge Action。
+
+## 组件化制作与只读结构验收
+
+- 新建 UI 先按职责列组件清单、查找复用资源，再先子后父组装；MCP、CLI 和直接生成 XML 均适用。仅讨论的截图和既有界面不因本规范自动进入修改范围。
+- 组件化细则与计划格式见 [componentization.md](componentization.md)。Skill 附带 scripts/check_component_structure.py，只读核对已保存基础分支 XML 与制作前计划，不新增 MCP 工具或 Bridge Action。
+- 检查真实组件引用、节点归属、计划可达性、重复资源复用、循环引用、局部基础引用与整数坐标；不自动决定拆分边界，不代替 Editor/视觉或运行时验收。
+- 测试样例位于 Bridge 仓库 tests/fixtures/componentization；禁止用业务界面作为写操作测试目标。未实现旧节点自动提取为组件。
+
+## 换皮布局差异检查
+
+- Skill 附带 `scripts/compare_skin_layout.py`，使用参考工程、目标工程及同路径根组件，只读比较基础 XML 的结构、坐标、锚点、列表、排版和状态属性；递归解析组件实例、列表项及滚动条的真实 ID 引用。
+- 未确认差异、失效确认或读取错误返回非零；有意差异需精确记录原值/新值及理由。图像资源替换、文案和纯颜色不作位置差异；不自动改布局、识图或推断最终状态位置。
+- 完整流程、命令及范围见 [reskin-layout.md](reskin-layout.md)。源检查、Editor 默认状态与游戏动态状态分别验收；工具不连接 Editor，不增加 MCP/CLI Action，插件协议和版本不变。
+
 ## CLI 映射
 
 正式子命令包括：
 
-- 基础：`status`、`ping`、`project`、`packages`、`items`、`open`、`active`、`tree`、`select`、`set`、`insert`、`remove`
+- 基础：`status`、`ping`、`project`、`packages`、`items`、`open`、`active`、`tree`、`layout`（`--output PNG` 可选）、`select`、`set`、`insert`、`remove`
 - 资源：`create-component`、`create-button`、`import-image`、`import-font`、`import-sound`、`create-movieclip`、`get-movieclip`、`update-movieclip`、`remove-movieclip`
 - Transition：`transitions`、`get-transition`、`upsert-transition`、`remove-transition`、`add-transition-item`、`update-transition-item`、`remove-transition-item`
 - 预览：`preview-transition`、`preview-movieclip`
@@ -94,6 +120,9 @@
 
 | 变动文件/区域 | 需要同步 |
 | --- | --- |
+| `scripts/sync_to_project.py` 插件安装目标 | README、本 Skill、CLI `update` 与安装回归测试 |
+| Skill 组件化规则、references/componentization.md、scripts/check_component_structure.py | MCP instructions、README、本能力参考、结构回归样例与测试；同步 Skill 时包含 references/scripts |
+| Skill 换皮规则、references/reskin-layout.md、scripts/compare_skin_layout.py | MCP instructions、README、本能力参考、隔离回归；同步 Skill 包含脚本与参考文档 |
 | `plugin/main.ts` Action、参数、返回值、动画序列化、阻塞策略、协议或版本 | `plugin/main.js`、三处版本、README、本 Skill 与本文件 |
 | `src/fairygui_agent/mcp_server.py` MCP 工具或参数 | `src/fairygui_agent/bridge_client.py` capability、README、CLI/Skill 映射、本文件 |
 | `src/fairygui_agent/cli.py` 子命令、参数或退出码 | README CLI、本 Skill、本文件 |
@@ -103,3 +132,32 @@
 2. 插件 capability、Action 分发、Python 动画 capability 检查、MCP 工具、CLI parser 和文档清单一致。
 3. `plugin/main.ts` 与重新编译的 `plugin/main.js` 一致。
 4. 创建/导入/预览变更应在 FairyGUI Editor `6.1.4` 隔离工程副本中验证，避免污染正式工程。
+
+
+## 0.9.5 布局快照回归（2026-11-09）
+
+在业务工程隔离副本中使用实际编译插件执行 7 种组件 × 50% / 100% / 150% 画布缩放，共 21 次原生快照；未保存或发布业务 UI。
+
+| 组件 | 检查内容 | 结果 |
+| --- | --- | --- |
+| `ju_spin_stash/PopupSpinStash` | 居中锚点、1590×960 全画布、背景 `(103,104)` | 通过，右侧不再受视口截断 |
+| `ju_spin_stash_exchange/PopupSpinStashExchange` | 居中锚点、独立兑换弹窗 | 通过 |
+| `ju_spin_stash_task/PopupSpinStashTask` | 滚动列表、嵌套内部裁切 | 通过，各缩放下保留右侧奖励 |
+| `ju_spin_stash_task/task_item_default` | 非锚点根、1108×132 任务行 | 通过 |
+| `ju_spin_stash_exchange/ExchangeButton` | 341×98 小组件、锚点 | 通过 |
+| `ju_common/green_btn` | 公共按钮、Controller 默认页 | 通过 |
+| 临时 `LayoutProbe` | 画布四角、远端遮罩、旋转 30°、镜像及非等比缩放 | 通过，四角/遮罩像素断言及独立四角数学预期一致 |
+
+各次快照前后文档 URL、修改标记、保存版本、选择数量及画布缩放一致。跨缩放坐标最大浮点差小于 0.0004 组件像素；带图片/字体的边缘存在宿主栅格化差异，未声称逐像素相同。42 项自动化检查覆盖独立绘制上下文、纹理释放、成功/失败恢复、PNG 行方向/透明度、MCP 图片内容及 CLI 导出。上述结果只证明编辑器快照路径，不包含游戏运行时验收。
+
+全局安装后另启隔离 Editor，通过实际 JSON 队列完成 `ping`、打开主弹窗和带图快照：插件回报 `0.9.5`，1590×960 预览完整，背景坐标约 `(103,104)`，快照前后文档状态相同。安装源码、编译产物、宿主类型及版本文件哈希一致；原有用户 Editor 实例保留，需重启以加载新版。
+
+## Skill 百分比进度检查
+
+`check_progress_bars.py` 针对明确选择的百分比/平铺条目检查已保存基础 XML：默认与实例值、0–100 范围、唯一配对百分比、实际填充资源及文件存在性。支持嵌套填充组件；特殊端点图片仅可按精确资源 ID 和非空原因记录九宫格例外，未命中或缺失资源仍失败。错误返回非零；不连接编辑器，不验证游戏计算或图像解码。FTS 规范及独立验收边界见 [progress-bars.md](progress-bars.md)。脚本、参考文档和测试随 Skill 源仓库维护，并通过既有同步入口安装，无插件协议或版本变化。
+
+## 0.9.6 卸载生命周期修复（2026-11-10）
+
+旧版在入口执行期间给 `PluginInfo.onDestroy` 赋值；真实 Editor 加载完成后该字段为空，而隔离测试插件导出的同名函数能被宿主绑定并在退出时执行。修复改为入口导出 `onDestroy`，并先解绑事件、恢复后台设置，再清理菜单。旧实例残留委托需完全退出后重新加载；不据此扩大布局、进度条或游戏验收结论。
+
+验证：25 项相关自动化检查通过，覆盖卸载入口、输入空闲边界、卸载后焦点、重复加载及菜单清理失败时事件已释放。真实 Editor 在两个空工程中各正常启动/退出两次；四次均绑定 0.9.6 卸载入口，记录 `bridge destroyed`，无 `JsEnv has been disposed`。从 JS 回调直接调用 `App.OpenProject` 会造成宿主 JsEnv 销毁重入并使隔离实例崩溃，该路径不计入正常验收；批处理脚本另受专业版许可限制。用户原实例及其实际工程切换/焦点回归待完整退出重开后验收。

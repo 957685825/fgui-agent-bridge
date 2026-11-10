@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<packageDescription id="layout01">
+  <resources>
+    <component id="popup001" name="PopupDemo.xml" path="/" exported="true"/>
+    <component id="amount01" name="AmountDisplay.xml" path="/parts/" exported="true"/>
+    <component id="badge001" name="BonusBadge.xml" path="/parts/" exported="true"/>
+  </resources>
+</packageDescription>

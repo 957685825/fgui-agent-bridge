@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<packageDescription id="shared01">
+  <resources>
+    <component id="reward01" name="RewardItem.xml" path="/" exported="true"/>
+  </resources>
+</packageDescription>

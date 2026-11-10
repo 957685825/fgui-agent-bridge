@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component size="600,360">
+  <displayList>
+    <graph id="background" name="background" xy="0,0" size="600,360" type="rect" lineSize="0" fillColor="#202838"/>
+    <component id="amount" name="amount" src="amount01" fileName="parts/AmountDisplay.xml" xy="24,24"/>
+    <component id="badge" name="badge" src="badge001" fileName="parts/BonusBadge.xml" xy="452,24"/>
+    <component id="rewardA" name="rewardA" src="reward01" pkg="shared01" fileName="RewardItem.xml" xy="24,190"/>
+    <component id="rewardB" name="rewardB" src="reward01" pkg="shared01" fileName="RewardItem.xml" xy="220,190"/>
+    <graph id="decoration" name="decoration" xy="24,332" size="552,4" type="rect" lineSize="0" fillColor="#78bfff"/>
+  </displayList>
+</component>

@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.onDestroy = onDestroy;
 var FairyEditor = CS.FairyEditor;
 var UnityEngine = CS.UnityEngine;
 const puerts = require("puerts");
@@ -11,11 +12,14 @@ const IOSearchOption = CS.System.IO.SearchOption;
 const App = FairyEditor.App;
 const previousRunInBackground = UnityEngine.Application.runInBackground;
 UnityEngine.Application.runInBackground = true;
-const BRIDGE_VERSION = "0.8.1";
+const BRIDGE_VERSION = "0.9.6";
 const PROTOCOL_VERSION = "1.0";
 const POLL_INTERVAL_FRAMES = 6;
 const STATUS_INTERVAL_FRAMES = 60;
 const MAX_COMMANDS_PER_POLL = 4;
+const COMMON_PACKAGE_NAMES = ["ju_common", "ju_common_coins"];
+const SYNC_CURRENT_MENU_ID = "fgui_agent_sync_common_current";
+const SYNC_ALL_MENU_ID = "fgui_agent_sync_common_all";
 const agentUndoStack = [];
 const agentRedoStack = [];
 let frameCount = 0;
@@ -27,6 +31,13 @@ let statusFile = "";
 let logFile = "";
 let initialized = false;
 let publishInProgress = false;
+// 只在请求结束或窗口重新获得焦点后安排一次恢复；心跳不触碰用户输入状态。
+let inputRecoveryPending = false;
+let inputIdleSince = -1;
+const INPUT_RECOVERY_IDLE_SECONDS = 0.5;
+let toolMenu = null;
+let commonSyncMenuRegistered = false;
+let commonSyncMenuRegistrationFrame = -1;
 const animationPreviewContexts = {};
 function nowIso() {
     return new Date().toISOString();
@@ -44,6 +55,190 @@ function appendLog(message) {
 function ensureDirectory(path) {
     if (!IODirectory.Exists(path))
         IODirectory.CreateDirectory(path);
+}
+function normalizedPath(path) {
+    return String(IOPath.GetFullPath(path)).replace(/[\\/]+$/, "").toLowerCase();
+}
+function samePath(left, right) {
+    return normalizedPath(left) === normalizedPath(right);
+}
+function relativePath(root, child) {
+    const normalizedRoot = String(IOPath.GetFullPath(root)).replace(/[\\/]+$/, "");
+    const normalizedChild = String(IOPath.GetFullPath(child));
+    const separator = normalizedChild.substring(normalizedRoot.length, normalizedRoot.length + 1);
+    if (normalizedChild.length <= normalizedRoot.length || (separator !== "/" && separator !== "\\"))
+        throw new Error(`路径不在公共包目录内：${child}`);
+    return normalizedChild.substring(normalizedRoot.length + 1);
+}
+function copyDirectoryTree(source, destination) {
+    ensureDirectory(destination);
+    const directories = IODirectory.GetDirectories(source, "*", IOSearchOption.AllDirectories);
+    for (let i = 0; i < directories.Length; i++) {
+        const sourceDirectory = String(directories.GetValue(i));
+        ensureDirectory(IOPath.Combine(destination, relativePath(source, sourceDirectory)));
+    }
+    const files = IODirectory.GetFiles(source, "*", IOSearchOption.AllDirectories);
+    for (let i = 0; i < files.Length; i++) {
+        const sourceFile = String(files.GetValue(i));
+        const destinationFile = IOPath.Combine(destination, relativePath(source, sourceFile));
+        ensureDirectory(IOPath.GetDirectoryName(destinationFile));
+        IOFile.Copy(sourceFile, destinationFile, true);
+    }
+}
+function mirrorDirectory(source, destination) {
+    if (!IODirectory.Exists(source))
+        throw new Error(`公共包真源不存在：${source}`);
+    if (samePath(source, destination))
+        return;
+    const temp = `${destination}.fgui-agent-sync-temp`;
+    const backup = `${destination}.fgui-agent-sync-backup`;
+    if (IODirectory.Exists(temp))
+        IODirectory.Delete(temp, true);
+    if (IODirectory.Exists(backup))
+        IODirectory.Delete(backup, true);
+    copyDirectoryTree(source, temp);
+    try {
+        if (IODirectory.Exists(destination))
+            IODirectory.Move(destination, backup);
+        IODirectory.Move(temp, destination);
+        if (IODirectory.Exists(backup))
+            IODirectory.Delete(backup, true);
+    }
+    catch (error) {
+        if (!IODirectory.Exists(destination) && IODirectory.Exists(backup))
+            IODirectory.Move(backup, destination);
+        if (IODirectory.Exists(temp))
+            IODirectory.Delete(temp, true);
+        throw error;
+    }
+}
+function findCommonRoot(projectBasePath) {
+    let current = String(IOPath.GetFullPath(projectBasePath));
+    let result = "";
+    while (current) {
+        const packageXml = IOPath.Combine(current, "assets", "ju_common", "package.xml");
+        if (IOFile.Exists(packageXml))
+            result = current;
+        const parent = String(IOPath.GetDirectoryName(current) || "");
+        if (!parent || samePath(parent, current))
+            break;
+        current = parent;
+    }
+    if (!result)
+        throw new Error(`未能从当前工程向上找到公共包真源 assets/ju_common：${projectBasePath}`);
+    return result;
+}
+function listFairyProjectDirectories(commonRoot) {
+    const fairyFiles = IODirectory.GetFiles(commonRoot, "*.fairy", IOSearchOption.AllDirectories);
+    const result = [];
+    const normalizedResult = [];
+    for (let i = 0; i < fairyFiles.Length; i++) {
+        const projectDirectory = String(IOPath.GetDirectoryName(String(fairyFiles.GetValue(i))) || "");
+        if (!projectDirectory || samePath(projectDirectory, commonRoot))
+            continue;
+        if (!IODirectory.Exists(IOPath.Combine(projectDirectory, "assets")))
+            continue;
+        const key = normalizedPath(projectDirectory);
+        if (normalizedResult.indexOf(key) !== -1)
+            continue;
+        normalizedResult.push(key);
+        result.push(projectDirectory);
+    }
+    result.sort();
+    return result;
+}
+function hasManagedCommonPackage(projectDirectory) {
+    for (let i = 0; i < COMMON_PACKAGE_NAMES.length; i++) {
+        const packageXml = IOPath.Combine(projectDirectory, "assets", COMMON_PACKAGE_NAMES[i], "package.xml");
+        if (IOFile.Exists(packageXml))
+            return true;
+    }
+    return false;
+}
+function syncCommonPackagesToProject(commonRoot, projectDirectory) {
+    let synced = 0;
+    for (let i = 0; i < COMMON_PACKAGE_NAMES.length; i++) {
+        const packageName = COMMON_PACKAGE_NAMES[i];
+        const source = IOPath.Combine(commonRoot, "assets", packageName);
+        const destination = IOPath.Combine(projectDirectory, "assets", packageName);
+        if (!IODirectory.Exists(source))
+            continue;
+        mirrorDirectory(source, destination);
+        synced++;
+    }
+    return synced;
+}
+function assertCommonSyncReady() {
+    if (!App.project || !App.project.opened)
+        throw new Error("FairyGUI 工程尚未打开");
+    if (App.docView && App.docView.HasUnsavedDocuments())
+        throw new Error("当前工程存在未保存文档，请先保存后再同步公共包");
+}
+function syncCommonCurrent() {
+    assertCommonSyncReady();
+    const projectDirectory = String(App.project.basePath);
+    const commonRoot = findCommonRoot(projectDirectory);
+    if (samePath(projectDirectory, commonRoot))
+        return { projects: 0, packages: 0, commonRoot };
+    const packages = syncCommonPackagesToProject(commonRoot, projectDirectory);
+    return { projects: packages > 0 ? 1 : 0, packages, commonRoot };
+}
+function syncCommonAll() {
+    assertCommonSyncReady();
+    const commonRoot = findCommonRoot(String(App.project.basePath));
+    const projects = listFairyProjectDirectories(commonRoot);
+    let syncedProjects = 0;
+    let syncedPackages = 0;
+    for (let i = 0; i < projects.length; i++) {
+        const projectDirectory = projects[i];
+        if (!hasManagedCommonPackage(projectDirectory))
+            continue;
+        const count = syncCommonPackagesToProject(commonRoot, projectDirectory);
+        if (count > 0) {
+            syncedProjects++;
+            syncedPackages += count;
+        }
+    }
+    return { projects: syncedProjects, packages: syncedPackages, commonRoot };
+}
+function runCommonSync(scope) {
+    try {
+        App.SetWaitCursor(true);
+        const result = scope === "current" ? syncCommonCurrent() : syncCommonAll();
+        App.RefreshProject();
+        const scopeText = scope === "current" ? "当前工程" : "全部已接入工程";
+        const message = result.projects === 0 && scope === "current"
+            ? `当前打开的是公共包真源，无需同步。\n${result.commonRoot}`
+            : `${scopeText}公共包同步完成：${result.projects} 个工程，${result.packages} 个包。`;
+        App.consoleView.Log(`[FGUI Agent Bridge] ${message.replace("\n", " ")}`);
+        App.Alert(message);
+    }
+    catch (error) {
+        const message = error && error.message ? String(error.message) : String(error);
+        App.consoleView.LogError(`[FGUI Agent Bridge] 公共包同步失败：${message}`);
+        App.Alert(`公共包同步失败：\n${message}`);
+    }
+    finally {
+        App.SetWaitCursor(false);
+    }
+}
+function registerCommonSyncMenu() {
+    if (commonSyncMenuRegistered)
+        return;
+    try {
+        toolMenu = App.menu.GetSubMenu("tool");
+        if (!toolMenu)
+            return;
+        toolMenu.AddItem("同步公共包到当前工程", SYNC_CURRENT_MENU_ID, (_menuItem) => runCommonSync("current"));
+        toolMenu.AddItem("同步公共包到全部已接入工程", SYNC_ALL_MENU_ID, (_menuItem) => runCommonSync("all"));
+        commonSyncMenuRegistered = true;
+        appendLog("common package sync menu registered");
+    }
+    catch (error) {
+        const message = error && error.message ? String(error.message) : String(error);
+        appendLog(`common package sync menu registration failed: ${message}`);
+        App.consoleView.LogError(`[FGUI Agent Bridge] 公共包同步菜单注册失败：${message}`);
+    }
 }
 function initializeBridge() {
     if (!App.project || !App.project.opened)
@@ -116,6 +311,7 @@ function writeStatus() {
             "preview_animation",
             "get_active_document",
             "get_tree",
+            "get_layout_snapshot",
             "select_object",
             "set_property",
             "insert_object",
@@ -276,6 +472,137 @@ function describeObject(obj, depth, maxDepth) {
     }
     else if (typeof component.numChildren === "number") {
         result.childCount = component.numChildren;
+    }
+    return result;
+}
+// 坐标统一由宿主换算到根画布，避免嵌套、旋转、镜像和编辑器缩放造成手工累加误差。
+function describeLayoutObject(obj, root, depth, maxDepth, budget) {
+    if (++budget.count > 10000)
+        throw new Error("布局快照超过 10000 个节点，请减小 maxDepth");
+    const result = describeObject(obj, 0, 0);
+    result.parentId = obj === root ? null : (obj.parent ? obj.parent.id : null);
+    result.pivotX = obj.pivotX;
+    result.pivotY = obj.pivotY;
+    result.anchor = obj.anchor;
+    result.skewX = obj.skewX;
+    result.skewY = obj.skewY;
+    result.sourceWidth = obj.sourceWidth;
+    result.sourceHeight = obj.sourceHeight;
+    result.internalVisible = obj.internalVisible;
+    result.hideByEditor = obj.hideByEditor;
+    const points = [[0, 0], [obj.width, 0], [obj.width, obj.height], [0, obj.height]];
+    const corners = [];
+    for (let i = 0; i < points.length; i++) {
+        // FObject 坐标接口会额外加减锚点；显示对象的局部原点才是布局矩形左上角。
+        // 直接变换到根显示对象，统一处理根/子节点锚点、嵌套、旋转及编辑器缩放。
+        const point = obj.displayObject.TransformPoint(new UnityEngine.Vector2(points[i][0], points[i][1]), root.displayObject);
+        corners.push({ x: point.x, y: point.y });
+    }
+    result.rootCorners = corners;
+    const xs = corners.map(point => point.x);
+    const ys = corners.map(point => point.y);
+    const x = Math.min.apply(null, xs);
+    const y = Math.min.apply(null, ys);
+    result.rootBounds = { x, y, width: Math.max.apply(null, xs) - x, height: Math.max.apply(null, ys) - y };
+    // 文字框和字形并不等宽；返回排版属性，让 Agent 结合原生预览核对可见文字边缘。
+    if (typeof obj.fontSize === "number") {
+        result.textStyle = {};
+        const keys = ["font", "fontSize", "align", "verticalAlign", "autoSize", "singleLine", "bold", "italic", "leading", "letterSpacing", "stroke", "strokeSize"];
+        for (let i = 0; i < keys.length; i++)
+            result.textStyle[keys[i]] = safeValue(obj[keys[i]]);
+    }
+    if (obj.controllers) {
+        result.controllers = [];
+        for (let i = 0; i < obj.controllers.Count; i++) {
+            const controller = obj.controllers.get_Item(i);
+            result.controllers.push({ name: controller.name, selectedIndex: controller.selectedIndex, selectedPage: controller.selectedPage });
+        }
+    }
+    if (typeof obj.numChildren === "number") {
+        result.childCount = obj.numChildren;
+        result.childrenTruncated = depth >= maxDepth && obj.numChildren > 0;
+        if (depth < maxDepth) {
+            result.children = [];
+            for (let i = 0; i < obj.numChildren; i++)
+                result.children.push(describeLayoutObject(obj.GetChildAt(i), root, depth + 1, maxDepth, budget));
+        }
+    }
+    return result;
+}
+function getLayoutSnapshot(params) {
+    const maxDepth = params.maxDepth === undefined ? 12 : params.maxDepth;
+    if (!Number.isInteger(maxDepth) || maxDepth < 0 || maxDepth > 64)
+        throw new Error("maxDepth 必须是 0 到 64 的整数");
+    if (params.includeImage !== undefined && typeof params.includeImage !== "boolean")
+        throw new Error("includeImage 必须是布尔值");
+    const doc = getActiveDocument();
+    const root = doc.content;
+    const result = {
+        document: describeDocument(doc),
+        canvas: { width: root.width, height: root.height, origin: "top-left", units: "component-pixels" },
+        reference: {
+            image: root.designImage || null,
+            offsetX: root.designImageOffsetX,
+            offsetY: root.designImageOffsetY,
+            alpha: root.designImageAlpha,
+            layer: root.designImageLayer,
+            forTest: root.designImageForTest
+        },
+        boundsKind: "transformed-layout-rectangle",
+        tree: describeLayoutObject(root, root, 0, maxDepth, { count: 0 }),
+        limitations: ["布局边界不是文字字形或图片非透明边界", "快照仅反映编辑器当前状态，不含游戏动态加载内容", "截断的 children 必须另行检查"]
+    };
+    if (params.includeImage === false)
+        return result;
+    // 限制原生纹理和队列体积；超大画布仍可单独读取布局，不能静默缩放后冒充原尺寸。
+    function checkSize(width, height) {
+        if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > 4096 || height > 4096 || width * height > 4194304)
+            throw new Error("原生预览仅支持整数尺寸、单边不超过 4096 且总面积不超过 4194304 像素的画布；可用 includeImage=false 读取布局");
+    }
+    checkSize(root.width, root.height);
+    const display = root.displayObject;
+    // GetScreenShot 自身不会重建子节点的裁切材质，直接调用会继承编辑器视口裁切。
+    // 独立请求位保持离屏绘制状态，刷新后仍保留组件内部遮罩；不移动或缩放 UI。
+    const requestId = 1048576;
+    let texture = null;
+    display.EnterPaintingMode(requestId, null, 1);
+    try {
+        // 从空绘制上下文更新根组件，避免祖先视口的裁切深度继续影响内部列表遮罩。
+        const context = new CS.FairyGUI.UpdateContext();
+        context.Begin();
+        try {
+            display.Update(context);
+        }
+        finally {
+            context.End();
+        }
+        texture = display.GetScreenShot(null, 1);
+        if (!texture)
+            throw new Error("编辑器未返回组件预览纹理");
+        checkSize(texture.width, texture.height);
+        if (texture.width !== root.width || texture.height !== root.height)
+            throw new Error("原生预览尺寸与根画布不一致，不能用作布局对照");
+        if (texture.format !== UnityEngine.TextureFormat.RGBA32)
+            throw new Error("原生预览纹理格式不是 RGBA32");
+        const pixels = texture.GetRawTextureData();
+        if (pixels.Length !== texture.width * texture.height * 4)
+            throw new Error("原生预览像素长度与尺寸不一致");
+        result.preview = { width: texture.width, height: texture.height, scale: 1, origin: "top-left" };
+        result.capture = {
+            width: texture.width, height: texture.height, format: "RGBA32", rowOrder: "bottom-up",
+            rgbaBase64: CS.System.Convert.ToBase64String(pixels)
+        };
+    }
+    finally {
+        // 截图或编码失败也释放纹理，并恢复编辑器原有绘制/裁切状态；不改文档或选择。
+        try {
+            if (texture)
+                UnityEngine.Object.Destroy(texture);
+        }
+        finally {
+            display.LeavePaintingMode(requestId);
+            CS.FairyGUI.Stage.inst.ForceUpdate();
+        }
     }
     return result;
 }
@@ -2093,6 +2420,7 @@ function handleCommand(request) {
     if (requestProtocol && requestProtocol.split(".")[0] !== PROTOCOL_VERSION.split(".")[0])
         throw new Error(`协议版本不兼容：编辑器 ${PROTOCOL_VERSION}，客户端 ${requestProtocol}`);
     const actionsBlockedDuringPublish = {
+        get_layout_snapshot: true,
         open_document: true,
         create_component: true,
         import_image: true,
@@ -2170,6 +2498,8 @@ function handleCommand(request) {
                 tree: describeObject(doc.content, 0, maxDepth)
             };
         }
+        case "get_layout_snapshot":
+            return getLayoutSnapshot(params);
         case "select_object": {
             const doc = getActiveDocument();
             const obj = resolveObject(doc, params.target);
@@ -2363,7 +2693,40 @@ function handleCommand(request) {
             throw new Error(`未知 action：${action}`);
     }
 }
+function scheduleInputRecovery() {
+    inputRecoveryPending = true;
+    inputIdleSince = -1;
+}
+function onEditorFocusChanged(focused) {
+    // 后台期间可能收不到修饰键的 KeyUp；回到编辑器后等待真实输入结束再恢复。
+    if (focused)
+        scheduleInputRecovery();
+}
+function recoverInputWhenIdle() {
+    if (!inputRecoveryPending)
+        return;
+    // 使用宿主的实时按键状态，保留按住 Shift 多选、组合键和鼠标拖动。
+    // 半秒空闲窗口同时避开鼠标松开当帧和普通双击，不在每次轮询时重置输入。
+    if (!UnityEngine.Application.isFocused || UnityEngine.Input.anyKey
+        || UnityEngine.Input.GetMouseButton(0) || UnityEngine.Input.GetMouseButton(1)
+        || UnityEngine.Input.GetMouseButton(2)) {
+        inputIdleSince = -1;
+        return;
+    }
+    const now = UnityEngine.Time.unscaledTime;
+    if (inputIdleSince < 0)
+        inputIdleSince = now;
+    if (now - inputIdleSince < INPUT_RECOVERY_IDLE_SECONDS)
+        return;
+    // 同时清理 FairyGUI 指针事件中的修饰键缓存和编辑器方向键缓存。
+    // 原生接口不保存文档，也不修改组件、当前选择或文本输入焦点。
+    CS.FairyGUI.Stage.inst.ResetInputState();
+    FairyEditor.ArrowKeyHelper.Reset();
+    inputRecoveryPending = false;
+    appendLog("input state recovered after bridge request/focus");
+}
 function completeRequestSuccess(claimedPath, requestId, action, result) {
+    scheduleInputRecovery();
     const response = {
         id: requestId,
         ok: true,
@@ -2377,6 +2740,7 @@ function completeRequestSuccess(claimedPath, requestId, action, result) {
         IOFile.Delete(claimedPath);
 }
 function completeRequestError(claimedPath, requestId, action, error) {
+    scheduleInputRecovery();
     const message = error && error.message ? String(error.message) : String(error);
     const stack = error && error.stack ? String(error.stack) : undefined;
     const response = {
@@ -2429,6 +2793,7 @@ function pollRequests() {
 }
 function onUpdate() {
     frameCount++;
+    recoverInputWhenIdle();
     if (!initialized) {
         if (!initializeBridge())
             return;
@@ -2437,6 +2802,10 @@ function onUpdate() {
         initialized = false;
         return;
     }
+    if (commonSyncMenuRegistrationFrame >= 0 && frameCount >= commonSyncMenuRegistrationFrame) {
+        commonSyncMenuRegistrationFrame = -1;
+        registerCommonSyncMenu();
+    }
     if (frameCount % POLL_INTERVAL_FRAMES === 0)
         pollRequests();
     if (frameCount % STATUS_INTERVAL_FRAMES === 0)
@@ -2444,6 +2813,7 @@ function onUpdate() {
 }
 function onProjectOpened() {
     initializeBridge();
+    commonSyncMenuRegistrationFrame = frameCount + 2;
 }
 function onProjectClosed() {
     if (initialized)
@@ -2453,22 +2823,24 @@ function onProjectClosed() {
 App.add_onUpdate(onUpdate);
 App.add_onProjectOpened(onProjectOpened);
 App.add_onProjectClosed(onProjectClosed);
-let pluginInfo = null;
-for (let i = 0; i < App.pluginManager.allPlugins.Count; i++) {
-    const candidate = App.pluginManager.allPlugins.get_Item(i);
-    if (candidate.name === "com.fgui.agent-bridge") {
-        pluginInfo = candidate;
-        break;
+UnityEngine.Application.add_focusChanged(onEditorFocusChanged);
+// 宿主在入口执行完后绑定导出的生命周期；直接给 PluginInfo 赋值会被覆盖。
+// 先解绑事件，再清理菜单，避免菜单异常使回调跨越 JsEnv 的生命周期。
+function onDestroy() {
+    App.remove_onUpdate(onUpdate);
+    App.remove_onProjectOpened(onProjectOpened);
+    App.remove_onProjectClosed(onProjectClosed);
+    UnityEngine.Application.remove_focusChanged(onEditorFocusChanged);
+    inputRecoveryPending = false;
+    UnityEngine.Application.runInBackground = previousRunInBackground;
+    appendLog("bridge destroyed");
+    initialized = false;
+    if (toolMenu) {
+        toolMenu.RemoveItem(SYNC_CURRENT_MENU_ID);
+        toolMenu.RemoveItem(SYNC_ALL_MENU_ID);
+        toolMenu = null;
+        commonSyncMenuRegistered = false;
     }
 }
-if (pluginInfo) {
-    pluginInfo.onDestroy = () => {
-        App.remove_onUpdate(onUpdate);
-        App.remove_onProjectOpened(onProjectOpened);
-        App.remove_onProjectClosed(onProjectClosed);
-        UnityEngine.Application.runInBackground = previousRunInBackground;
-        if (initialized)
-            appendLog("bridge destroyed");
-    };
-}
 initializeBridge();
+commonSyncMenuRegistrationFrame = frameCount + 2;

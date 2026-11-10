@@ -2,12 +2,12 @@
   "name": "com.fgui.agent-bridge",
   "displayName": "FGUI Agent Bridge",
   "description": "通过本地 JSON 指令队列让 Agent 安全操作 FairyGUI Editor",
-  "version": "0.8.1",
+  "version": "0.9.6",
   "author": {
     "name": "Wilson520403"
   },
   "icon": "",
   "main": "main.js",
   "license": "MIT",
-  "repository": "https://github.com/Wilson520403/fgui-agent-bridge"
+  "repository": "https://github.com/957685825/fgui-agent-bridge"
 }

@@ -3,26 +3,40 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import json
 from pathlib import Path
 from typing import Any, Literal
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ImageContent, TextContent
 
 from . import __version__
 from .animation_models import TransitionDefinition, TransitionItem
 from .bridge_client import BridgeClient
 from .editor_launcher import EditorLauncher
 from .project_locator import ProjectLocator
+from .layout_snapshot import encode_snapshot_png
 
 mcp = FastMCP(
     "FairyGUI Agent Bridge",
     instructions=(
         "先读取工程、包和对象树，再执行修改。文档属性和对象修改默认不保存；"
+        "只有用户明确要求时才调用保存工具。发布前先调用 fgui_get_publish_settings，"
+        "并确认用户要求的包范围后再调用 fgui_publish。"
+        "新建 UI 时先按功能职责列组件清单，优先复用已有资源，先子组件后父组件；"
+        "独立功能区和重复项使用真实组件引用，Group 或空壳不算组件化，单纯装饰不必拆。"
+        "完成后对照组件清单核对实际引用和节点归属；有 fgui-agent-bridge Skill 时执行其中结构验收。仅讨论的截图不授权修改。"
         "创建组件或按钮会新增包资源，导入/替换图片、声音和 MovieClip 会写入磁盘，调用前必须确认包、目录、名称和冲突策略。"
         "Transition 编辑与已有 MovieClip 更新支持 Agent undo/redo；新建/删除资源不能完整撤销，且资源写入不能由 fgui_discard_document 回滚。"
         "动画预览只改变 Editor 当前状态，不保存资源默认属性。"
-        "只有用户明确要求时才调用保存工具。发布前先调用 fgui_get_publish_settings，"
-        "并确认用户要求的包范围后再调用 fgui_publish。"
+        "对照效果图摆 UI 时，先核对原图画布尺寸和裁切偏移，读取 fgui_get_layout_snapshot 的根画布坐标、字体和原生预览；"
+        "修改后再次对照同一坐标系的预览，不能以对象树数值正确代替视觉验收。不要把文字框或透明图片边界当可见内容边界。"
+        "换皮先固定旧皮肤主参考，默认保留结构、锚点、列表间距和动态奖励挂点；"
+        "有 fgui-agent-bridge Skill 时执行 reskin-layout.md 的只读差异检查，有意差异逐条记录精确值及理由。"
+        "源文件、编辑器默认状态与游戏动态状态分别验收，不能以源检查通过代替整体验收。"
+        "进度条与百分比文字共用同一取整并钳制后的显示值；计数独立显示。"
+        "有 fgui-agent-bridge Skill 时执行 progress-bars.md，按工程约定核对百分比范围、纹理平铺和实例覆盖，并对比多个 UI。"
     ),
 )
 # MCP Python SDK 1.x 的 FastMCP 构造器没有公开 version 参数，需向底层 Server 写入工具版本。
@@ -135,7 +149,7 @@ def fgui_create_component(
     create_folders: bool = True,
     open_after_create: bool = True,
 ) -> dict[str, Any]:
-    """在指定包中新建组件文档；默认打开但不保存，重名时默认拒绝。"""
+    """按组件清单新建一个职责明确的组件；先查找可复用资源，默认打开不保存，重名时拒绝。"""
     params: dict[str, Any] = {
         "packageName": package_name,
         "componentName": component_name,
@@ -262,6 +276,23 @@ def fgui_get_tree(max_depth: int = 12) -> dict[str, Any]:
     if max_depth < 0 or max_depth > 64:
         raise ValueError("max_depth 必须在 0 到 64 之间")
     return _client.call("get_tree", {"maxDepth": max_depth})
+
+
+@mcp.tool(structured_output=False)
+def fgui_get_layout_snapshot(max_depth: int = 12, include_image: bool = True) -> list[TextContent | ImageContent]:
+    """读取当前组件的根画布坐标、字体、Controller、设计图信息和原生预览；不切换或保存文档。"""
+    if not 0 <= max_depth <= 64:
+        raise ValueError("max_depth 必须在 0 到 64 之间")
+    snapshot = dict(_client.call("get_layout_snapshot", {"maxDepth": max_depth, "includeImage": include_image}))
+    # 大块原始像素只在本地编码，MCP 返回原生图片内容，避免把 Base64 当作布局文本塞入上下文。
+    capture = snapshot.pop("capture", None)
+    png = encode_snapshot_png(capture) if capture is not None else None
+    if include_image and png is None:
+        raise ValueError("编辑器未返回原生预览，请检查插件版本")
+    content: list[TextContent | ImageContent] = [TextContent(type="text", text=json.dumps(snapshot, ensure_ascii=False))]
+    if png is not None:
+        content.append(ImageContent(type="image", mimeType="image/png", data=base64.b64encode(png).decode("ascii")))
+    return content
 
 
 @mcp.tool()
@@ -517,7 +548,7 @@ def fgui_insert_object(
     name: str | None = None,
     insert_index: int | None = None,
 ) -> dict[str, Any]:
-    """插入已有 ui:// 资源但不保存；结构操作不能由 Agent 属性事务栈撤销。"""
+    """引用已有 ui:// 资源组装父组件；重复项复用同一资源。不保存，结构操作不支持 Agent 属性撤销。"""
     params: dict[str, Any] = {"url": url, "x": x, "y": y}
     if name:
         params["name"] = name

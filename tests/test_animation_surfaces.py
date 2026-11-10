@@ -105,6 +105,20 @@ class LargeImageAtlasSurfaceTests(unittest.TestCase):
             self.assertIn("largeImageAtlasRule", text)
 
 
+class CommonPackageSyncSurfaceTests(unittest.TestCase):
+    def test_editor_menu_and_safe_mirror_are_compiled_into_plugin(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "plugin/main.ts").read_text(encoding="utf-8")
+        generated = (root / "plugin/main.js").read_text(encoding="utf-8")
+        for text in (source, generated):
+            self.assertIn('COMMON_PACKAGE_NAMES = ["ju_common", "ju_common_coins"]', text)
+            self.assertIn("同步公共包到当前工程", text)
+            self.assertIn("同步公共包到全部已接入工程", text)
+            self.assertIn("function mirrorDirectory", text)
+            self.assertIn("HasUnsavedDocuments", text)
+            self.assertIn("fgui-agent-sync-backup", text)
+
+
 class CliAnimationSurfaceTests(unittest.TestCase):
     def test_parser_exposes_all_animation_commands(self) -> None:
         parser = build_parser()
@@ -144,16 +158,16 @@ class CapabilityConsistencyTests(unittest.TestCase):
         init = (root / "src/fairygui_agent/__init__.py").read_text(encoding="utf-8")
         plugin = (root / "plugin/main.ts").read_text(encoding="utf-8")
         generated = (root / "plugin/main.js").read_text(encoding="utf-8")
-        self.assertEqual(package_version, "0.8.1")
+        self.assertEqual(package_version, "0.9.6")
         for text in (pyproject, init, plugin, generated):
-            self.assertIn("0.8.1", text)
+            self.assertIn("0.9.6", text)
 
     def test_documented_mcp_tool_count_is_current(self) -> None:
         root = Path(__file__).resolve().parents[1]
         documented = (root / ".agents/skills/fgui-agent-bridge/references/current-capabilities.md").read_text(encoding="utf-8")
         tool_names = [name for name in vars(mcp_server) if name.startswith("fgui_")]
-        self.assertEqual(len(tool_names), 38)
-        self.assertIn("MCP 工具数：38", documented)
+        self.assertEqual(len(tool_names), 39)
+        self.assertIn("MCP 工具数：39", documented)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ declare namespace CS {
     namespace System {
         const Array: any;
         const String: any;
+        const Convert: any;
 
         namespace IO {
             const Directory: any;
@@ -21,6 +22,10 @@ declare namespace CS {
 
     namespace UnityEngine {
         const Application: any;
+        const Input: any;
+        const Time: any;
+        const Object: any;
+        const TextureFormat: any;
 
         class Vector2 {
             constructor(x: number, y: number);
@@ -29,8 +34,14 @@ declare namespace CS {
         }
     }
 
+    namespace FairyGUI {
+        const Stage: any;
+        const UpdateContext: any;
+    }
+
     namespace FairyEditor {
         const App: any;
+        const ArrowKeyHelper: any;
         const ComponentTemplates: any;
         const FObjectType: any;
         const FPackageItemType: any;

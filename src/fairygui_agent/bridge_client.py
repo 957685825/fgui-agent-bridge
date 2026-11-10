@@ -197,13 +197,15 @@ class BridgeClient:
     ) -> dict[str, Any]:
         context = self.project_context()
         status = self.ensure_ready()
+        if action == "get_layout_snapshot" and action not in status.get("capabilities", []):
+            raise BridgeError("FairyGUI Agent Bridge 缺少布局快照能力，请更新并重新加载 0.9.4 或更高版本插件。")
         if action in ANIMATION_CAPABILITIES:
             capabilities = {str(item) for item in status.get("capabilities", [])}
             if action not in capabilities:
                 bridge_version = status.get("bridgeVersion", "unknown")
                 raise BridgeError(
                     f"FairyGUI Agent Bridge 缺少动画能力：{action} "
-                    f"(编辑器 bridge {bridge_version})。请更新并重新加载 0.8.1 或更高版本插件。"
+                    f"(编辑器 bridge {bridge_version})。请更新并重新加载 0.9.0 或更高版本插件。"
                 )
 
         request_dir = context.queue_root / "requests"
@@ -240,7 +242,9 @@ class BridgeClient:
                     raise BridgeError(f"FairyGUI 返回了无效响应：{action}")
                 return response
             if not woke_again and time.monotonic() >= wake_again_at:
-                self.launcher.wake(context.project_file)
+                # 在线编辑器可能正在处理较慢的读取；只有心跳过期才唤醒，避免打断用户输入。
+                if status_age(self.read_status()) > self.heartbeat_max_age:
+                    self.launcher.wake(context.project_file)
                 woke_again = True
             time.sleep(0.05)
 

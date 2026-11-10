@@ -1,0 +1,22 @@
+{
+  "root": "layout_demo/PopupDemo",
+  "components": {
+    "layout_demo/PopupDemo": {
+      "background": "graph",
+      "amount": {"component": "layout_demo/parts/AmountDisplay"},
+      "badge": {"component": "layout_demo/parts/BonusBadge"},
+      "rewardA": {"component": "layout_shared/RewardItem"},
+      "rewardB": {"component": "layout_shared/RewardItem"},
+      "decoration": "graph"
+    },
+    "layout_demo/parts/AmountDisplay": {
+      "background": "graph", "label": "text", "value": "text"
+    },
+    "layout_demo/parts/BonusBadge": {
+      "background": "graph", "percent": "text", "label": "text"
+    },
+    "layout_shared/RewardItem": {
+      "background": "graph", "title": "text", "quantity": "text"
+    }
+  }
+}

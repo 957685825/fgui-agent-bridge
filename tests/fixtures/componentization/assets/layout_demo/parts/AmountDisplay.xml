@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component size="390,128">
+  <controller name="displayState" pages="0,normal,1,highlight" selected="0"/>
+  <displayList>
+    <graph id="background" name="background" xy="0,0" size="390,128" type="rect" lineSize="0" fillColor="#3b5275"/>
+    <text id="label" name="label" xy="16,12" size="358,32" fontSize="22" color="#ffffff" text="Amount"/>
+    <text id="value" name="value" xy="16,58" size="358,48" fontSize="36" color="#ffe190" text="12,345">
+      <gearDisplay controller="displayState" pages="0,1"/>
+    </text>
+  </displayList>
+  <transition name="reveal" frameRate="30">
+    <item time="0" type="Alpha" target="value" tween="true" startValue="0" endValue="1" duration="6"/>
+  </transition>
+</component>

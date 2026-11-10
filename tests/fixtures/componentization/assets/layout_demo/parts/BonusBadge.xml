@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component size="124,128">
+  <displayList>
+    <graph id="background" name="background" xy="0,0" size="124,128" type="rect" lineSize="0" fillColor="#984854"/>
+    <text id="percent" name="percent" xy="8,24" size="108,44" fontSize="32" color="#ffffff" align="center" text="25%"/>
+    <text id="label" name="label" xy="8,78" size="108,30" fontSize="18" color="#ffffff" align="center" text="BONUS"/>
+  </displayList>
+</component>

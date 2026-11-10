@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component size="172,112">
+  <displayList>
+    <graph id="background" name="background" xy="0,0" size="172,112" type="rect" lineSize="0" fillColor="#355b55"/>
+    <text id="title" name="title" xy="12,12" size="148,32" fontSize="22" color="#ffffff" text="Reward"/>
+    <text id="quantity" name="quantity" xy="12,62" size="148,32" fontSize="24" color="#ffffff" text="x10"/>
+  </displayList>
+</component>

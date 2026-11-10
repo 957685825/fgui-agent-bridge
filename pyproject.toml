@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fairygui-agent-bridge"
-version = "0.8.1"
+version = "0.9.6"
 description = "通过 MCP 和本地 JSON 队列操作 FairyGUI Editor"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -18,8 +18,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Wilson520403/fgui-agent-bridge"
-Repository = "https://github.com/Wilson520403/fgui-agent-bridge"
+Homepage = "https://github.com/957685825/fgui-agent-bridge"
+Repository = "https://github.com/957685825/fgui-agent-bridge"
 
 [project.scripts]
 fgui-agent = "fairygui_agent.cli:main"

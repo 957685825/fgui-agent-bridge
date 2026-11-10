@@ -63,6 +63,26 @@ class TestSyncAndUpdate(unittest.TestCase):
             )
             self.assertEqual((created, updated, unchanged, modified), (0, 0, 1, False))
 
+    def test_global_plugin_sync(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            repo_root = temp_path / "bridge"
+            plugin_source = repo_root / "plugin"
+            plugin_source.mkdir(parents=True)
+            (plugin_source / "main.js").write_text("bridge", encoding="utf-8")
+            home = temp_path / "home"
+
+            created, updated, unchanged, modified = sync_mod.perform_sync(
+                global_plugin=True,
+                apply=True,
+                repo_root=repo_root,
+                home=home,
+            )
+
+            destination = sync_mod.resolve_global_plugin_directory(home) / "main.js"
+            self.assertEqual((created, updated, unchanged, modified), (1, 0, 0, True))
+            self.assertEqual(destination.read_text(encoding="utf-8"), "bridge")
+
     def test_pull_source_repository_no_git(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)

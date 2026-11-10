@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""将独立仓库中的 FairyGUI 插件和可选 Skill 同步到目标工程。"""
+"""将独立仓库中的 FairyGUI 插件和可选 Skill 同步到安装目标。"""
 
 from __future__ import annotations
 
@@ -30,6 +30,11 @@ def parse_args() -> argparse.Namespace:
         description="预览或执行 FGUI Agent Bridge 插件与 Skill 同步，支持拉取源仓库最新更新。"
     )
     project_group = parser.add_mutually_exclusive_group(required=True)
+    project_group.add_argument(
+        "--global-plugin",
+        action="store_true",
+        help="安装到当前用户的 FairyGUI Editor 全局插件目录，所有工程共用。",
+    )
     project_group.add_argument(
         "--project",
         help="目标 .fairy 文件、FairyGUI 工程目录或包含 FairyGUI/FairyGUI.fairy 的仓库目录。",
@@ -214,6 +219,11 @@ def resolve_project_file(value: str) -> Path:
     )
 
 
+def resolve_global_plugin_directory(home: Path | None = None) -> Path:
+    """返回 FairyGUI Editor 当前用户的全局 Agent Bridge 插件目录。"""
+    return (home or Path.home()) / ".config" / "FairyGUI-Editor" / "plugins" / "agent-bridge"
+
+
 def iter_files(root: Path) -> list[Path]:
     result: list[Path] = []
     for path in sorted(root.rglob("*")):
@@ -271,12 +281,14 @@ def sync(entries: list[CopyEntry], *, apply: bool) -> tuple[int, int, int]:
 
 
 def perform_sync(
-    project_value: str,
+    project_value: str | None = None,
     skill_root_value: str | None = None,
     *,
+    global_plugin: bool = False,
     apply: bool = False,
     pull: bool = False,
     repo_root: Path = REPOSITORY_ROOT,
+    home: Path | None = None,
 ) -> tuple[int, int, int, bool]:
     """执行插件与可选 Skill 的同步。返回 (created, updated, unchanged, plugin_modified)。"""
     if pull:
@@ -285,8 +297,13 @@ def perform_sync(
     plugin_source = repo_root / "plugin"
     skill_source = repo_root / ".agents" / "skills" / "fgui-agent-bridge"
 
-    project_file = resolve_project_file(project_value)
-    plugin_destination = project_file.parent / "plugins" / "agent-bridge"
+    if global_plugin:
+        plugin_destination = resolve_global_plugin_directory(home)
+    elif project_value:
+        project_file = resolve_project_file(project_value)
+        plugin_destination = project_file.parent / "plugins" / "agent-bridge"
+    else:
+        raise ValueError("必须指定 --global-plugin 或目标 FairyGUI 工程。")
     entries = build_entries(plugin_source, plugin_destination)
     plugin_entries_count = len(entries)
 
@@ -308,7 +325,7 @@ def perform_sync(
     if not apply:
         print("如需执行，请在确认目标后追加 --apply。")
     elif plugin_modified:
-        print("\n⚠️ 提示：FairyGUI Editor 插件已写入/更新，请在编辑器中重新打开工程以加载新版插件。")
+        print("\n⚠️ 提示：FairyGUI Editor 插件已写入/更新，请重新启动编辑器以加载新版插件。")
 
     return created, updated, unchanged, plugin_modified
 
@@ -316,7 +333,9 @@ def perform_sync(
 def main() -> int:
     args = parse_args()
 
-    if args.choose_project:
+    if args.global_plugin:
+        project_value = None
+    elif args.choose_project:
         selected_project = choose_project_directory()
         if selected_project is None:
             print("已取消 FairyGUI 工程选择。")
@@ -329,6 +348,7 @@ def main() -> int:
     perform_sync(
         project_value=project_value,
         skill_root_value=args.skill_root,
+        global_plugin=args.global_plugin,
         apply=args.apply,
         pull=args.pull,
     )
