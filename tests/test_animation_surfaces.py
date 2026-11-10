@@ -158,9 +158,9 @@ class CapabilityConsistencyTests(unittest.TestCase):
         init = (root / "src/fairygui_agent/__init__.py").read_text(encoding="utf-8")
         plugin = (root / "plugin/main.ts").read_text(encoding="utf-8")
         generated = (root / "plugin/main.js").read_text(encoding="utf-8")
-        self.assertEqual(package_version, "0.9.6")
+        self.assertEqual(package_version, "0.9.7")
         for text in (pyproject, init, plugin, generated):
-            self.assertIn("0.9.6", text)
+            self.assertIn("0.9.7", text)
 
     def test_documented_mcp_tool_count_is_current(self) -> None:
         root = Path(__file__).resolve().parents[1]

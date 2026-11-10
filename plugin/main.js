@@ -12,11 +12,12 @@ const IOSearchOption = CS.System.IO.SearchOption;
 const App = FairyEditor.App;
 const previousRunInBackground = UnityEngine.Application.runInBackground;
 UnityEngine.Application.runInBackground = true;
-const BRIDGE_VERSION = "0.9.6";
+const BRIDGE_VERSION = "0.9.7";
 const PROTOCOL_VERSION = "1.0";
 const POLL_INTERVAL_FRAMES = 6;
 const STATUS_INTERVAL_FRAMES = 60;
 const MAX_COMMANDS_PER_POLL = 4;
+const ASSET_SCAN_INTERVAL_SECONDS = 2;
 const COMMON_PACKAGE_NAMES = ["ju_common", "ju_common_coins"];
 const SYNC_CURRENT_MENU_ID = "fgui_agent_sync_common_current";
 const SYNC_ALL_MENU_ID = "fgui_agent_sync_common_all";
@@ -31,6 +32,10 @@ let statusFile = "";
 let logFile = "";
 let initialized = false;
 let publishInProgress = false;
+let assetSnapshot = "";
+let pendingAssetSnapshot = "";
+let nextAssetScanAt = 0;
+let assetInputIdleSince = -1;
 // 只在请求结束或窗口重新获得焦点后安排一次恢复；心跳不触碰用户输入状态。
 let inputRecoveryPending = false;
 let inputIdleSince = -1;
@@ -256,11 +261,86 @@ function initializeBridge() {
     ensureDirectory(requestFolder);
     ensureDirectory(processingFolder);
     ensureDirectory(responseFolder);
+    resetAssetRefresh();
     initialized = true;
     appendLog(`bridge initialized: ${App.project.basePath}`);
     writeStatus();
     App.consoleView.Log(`[FGUI Agent Bridge] 已启动，队列目录：${queueRoot}`);
     return true;
+}
+// 只比较路径、大小与修改时间，不读取图片内容；在主线程低频扫描，避免文件监听线程进入 Puerts。
+function snapshotAssets() {
+    const files = IODirectory.GetFiles(App.project.assetsPath, "*", IOSearchOption.AllDirectories);
+    const entries = [];
+    for (let i = 0; i < files.Length; i++) {
+        const path = String(files.GetValue(i));
+        if (IOPath.GetFileName(path).startsWith(".") || /\.(tmp|temp|swp)$/i.test(path))
+            continue;
+        const info = new IOFileInfo(path);
+        entries.push(JSON.stringify([path, Number(info.Length), String(IOFile.GetLastWriteTimeUtc(path).Ticks)]));
+    }
+    return entries.sort().join("\n");
+}
+function resetAssetRefresh() {
+    assetSnapshot = "";
+    pendingAssetSnapshot = "";
+    nextAssetScanAt = 0;
+    assetInputIdleSince = -1;
+}
+function reloadChangedDocument() {
+    const doc = App.activeDoc;
+    // 非活动文档的原生 DiscardChanges 会访问未启用的画布；用户切到该页后再检查并重载。
+    if (!doc || doc.isModified || !doc.content || doc.savedVersion === undefined
+        || (doc.savedVersion === doc.packageItem.version && !doc.content.ValidateChildren(true)))
+        return;
+    doc.DiscardChanges();
+    clearAgentHistory();
+}
+function refreshExternalAssetsWhenIdle() {
+    const now = UnityEngine.Time.unscaledTime;
+    if (UnityEngine.Input.anyKey || UnityEngine.Input.GetMouseButton(0)
+        || UnityEngine.Input.GetMouseButton(1) || UnityEngine.Input.GetMouseButton(2))
+        assetInputIdleSince = -1;
+    else if (assetInputIdleSince < 0)
+        assetInputIdleSince = now;
+    if (now < nextAssetScanAt)
+        return;
+    nextAssetScanAt = now + ASSET_SCAN_INTERVAL_SECONDS;
+    try {
+        const snapshot = snapshotAssets() || "\n";
+        // 首次扫描只建立基线；后续变化必须连续两次一致，避免加载尚未写完的 package/XML/图片。
+        if (!assetSnapshot) {
+            assetSnapshot = snapshot;
+            return;
+        }
+        const changed = snapshot !== assetSnapshot;
+        if (!changed)
+            pendingAssetSnapshot = "";
+        else if (pendingAssetSnapshot !== snapshot) {
+            pendingAssetSnapshot = snapshot;
+            return;
+        }
+        // 原生刷新可能重载文档；任何未保存编辑、模态窗口、队列任务和真实输入均让本轮等待。
+        if (publishInProgress || App.docView.HasUnsavedDocuments()
+            || App.groot.hasModalWindow || App.groot.modalWaiting
+            || IODirectory.GetFiles(requestFolder, "*.json").Length > 0
+            || IODirectory.GetFiles(processingFolder, "*.json").Length > 0
+            || assetInputIdleSince < 0 || now - assetInputIdleSince < INPUT_RECOVERY_IDLE_SECONDS)
+            return;
+        // 资源异步加载结束后检查当前画布，也覆盖切回旧标签页和嵌套资源变化。
+        if (!changed) {
+            reloadChangedDocument();
+            return;
+        }
+        App.RefreshProject();
+        assetSnapshot = snapshot;
+        pendingAssetSnapshot = "";
+        appendLog("external assets refreshed automatically");
+    }
+    catch (error) {
+        // 文件被原子替换或临时锁定时保留旧基线，下次重试，不影响命令与用户编辑。
+        appendLog(`external asset refresh deferred: ${String(error)}`);
+    }
 }
 function writeJsonAtomic(path, data) {
     const tempPath = `${path}.tmp`;
@@ -2808,6 +2888,7 @@ function onUpdate() {
     }
     if (frameCount % POLL_INTERVAL_FRAMES === 0)
         pollRequests();
+    refreshExternalAssetsWhenIdle();
     if (frameCount % STATUS_INTERVAL_FRAMES === 0)
         writeStatus();
 }
@@ -2816,6 +2897,7 @@ function onProjectOpened() {
     commonSyncMenuRegistrationFrame = frameCount + 2;
 }
 function onProjectClosed() {
+    resetAssetRefresh();
     if (initialized)
         appendLog("project closed");
     initialized = false;
@@ -2832,6 +2914,7 @@ function onDestroy() {
     App.remove_onProjectClosed(onProjectClosed);
     UnityEngine.Application.remove_focusChanged(onEditorFocusChanged);
     inputRecoveryPending = false;
+    resetAssetRefresh();
     UnityEngine.Application.runInBackground = previousRunInBackground;
     appendLog("bridge destroyed");
     initialized = false;
