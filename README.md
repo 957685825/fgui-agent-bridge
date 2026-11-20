@@ -2,7 +2,7 @@
 
 通过 MCP (Model Context Protocol) 或 CLI，让 AI 编程 Agent（如 Cursor、Claude、Codex、VS Code 等）以结构化指令直接操作 FairyGUI Editor，实现自动拼 UI 界面、动效制作与一键发布。
 
-- **版本**：[`0.9.7`](https://github.com/957685825/fgui-agent-bridge/releases/tag/v0.9.7)
+- **版本**：[`0.9.8`](https://github.com/957685825/fgui-agent-bridge/releases/tag/v0.9.8)
 - **版本更新**：[完整更新记录](CHANGELOG.md) · [GitHub Releases](https://github.com/957685825/fgui-agent-bridge/releases)
 - **队列协议**：`1.0`
 - **已验证 FairyGUI Editor**：`6.1.4`
@@ -35,6 +35,8 @@
 ### 编辑器输入状态保护（0.9.3）
 
 Bridge 请求成功、失败或编辑器重新获得焦点后，等待窗口在前台且真实按键/鼠标均松开并连续空闲 0.5 秒，再通过宿主原生接口恢复一次指针和方向键输入状态。恢复不保存文档、不切换文档、不修改组件或当前选择；按住修饰键、多选及拖动期间会等待。定时心跳不会触发恢复。客户端等待较慢响应时，心跳正常则不再额外激活编辑器。
+
+从 0.9.8 起，外部资源自动刷新和随后的画布重载也各自安排输入恢复，覆盖没有 Bridge 请求或窗口焦点事件的刷新流程。
 
 这是针对“检查后输入失常、按两次 Shift 可恢复”的输入状态保护，尚未证明编辑器漏收 KeyUp 的具体原因；自动化宿主替身验证不等于真实编辑器手工回归。更新全局插件后需重启编辑器，客户端更新需重启 MCP 服务。
 

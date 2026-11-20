@@ -5,6 +5,7 @@ const vm = require('node:vm');
 const path = require('node:path');
 let files = { '/probe/assets/package/package.xml': [10, 1] };
 let queued = false, processing = false, dirty = false, failScan = false, refreshes = 0;
+let stageResets = 0, arrowResets = 0;
 const listeners = {};
 const array = values => ({ Length: values.length, GetValue(i) { return values[i]; } });
 const time = { unscaledTime: 0 };
@@ -22,10 +23,11 @@ for (let i = 0; i < events.length; i++) {
     app['add_' + name] = fn => { listeners[name] = fn; };
     app['remove_' + name] = () => { delete listeners[name]; };
 }
-const application = { runInBackground: false, add_focusChanged() {}, remove_focusChanged() {} };
+const application = { runInBackground: false, isFocused: true, add_focusChanged() {}, remove_focusChanged() {} };
 const context = vm.createContext({ exports: {}, require() { return {}; }, CS: {
     UnityEngine: { Time: time, Input: input, Application: application },
-    FairyEditor: { App: app },
+    FairyEditor: { App: app, ArrowKeyHelper: { Reset() { arrowResets++; } } },
+    FairyGUI: { Stage: { inst: { ResetInputState() { stageResets++; } } } },
     System: { IO: {
         SearchOption: { AllDirectories: 1 }, Path: { GetFileName: path.basename },
         Directory: { GetFiles(folder) {
@@ -49,14 +51,26 @@ app.project = { assetsPath: '/probe/assets', opened: true };
 vm.runInContext('requestFolder="requests"; processingFolder="processing";', context);
 function tick() { time.unscaledTime += 2; context.refreshExternalAssetsWhenIdle(); }
 function changed() { files['/probe/assets/package/package.xml'][1]++; tick(); }
+function recoverAfter(seconds) { time.unscaledTime += seconds; context.recoverInputWhenIdle(); }
+function assertResets(expected) { assert.equal(stageResets, expected); assert.equal(arrowResets, expected); }
 tick(); tick(); assert.equal(refreshes, 0);
+recoverAfter(0); recoverAfter(0.51); assertResets(0);
 files['/probe/assets/new/package.xml'] = [20, 1];
 tick(); assert.equal(refreshes, 0, 'wait for stable disk state');
 files['/probe/assets/new/package.xml'][1]++;
 tick(); assert.equal(refreshes, 0); tick(); assert.equal(refreshes, 1);
+// 原生刷新结束后，即使没有 Bridge 请求或窗口焦点事件，也应恢复输入。
+// 恢复仍须等待真实鼠标操作松开并连续空闲半秒。
+mouse[0] = true; recoverAfter(0); recoverAfter(0.51); assertResets(0);
+mouse[0] = false; recoverAfter(0); recoverAfter(0.49); assertResets(0);
+recoverAfter(0.02); assertResets(1);
 // 模拟原生异步版本更新：下一轮才刷新当前画布，无关版本不重载。
 doc.packageItem.version = 2; tick(); assert.equal(reloads, 1);
+// 异步加载后的画布重载是另一次原生操作，也需要等待键盘空闲后恢复。
+input.anyKey = true; recoverAfter(0); recoverAfter(0.51); assertResets(1);
+input.anyKey = false; recoverAfter(0); recoverAfter(0.51); assertResets(2);
 tick(); assert.equal(reloads, 1);
+recoverAfter(0); recoverAfter(0.51); assertResets(2);
 nestedStale = true; tick(); assert.equal(reloads, 2, 'nested resource update');
 app.activeDoc = null; doc.packageItem.version = 3; tick(); assert.equal(reloads, 2);
 app.activeDoc = doc; tick(); assert.equal(reloads, 3, 'reload when user activates stale tab');

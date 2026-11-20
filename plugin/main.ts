@@ -11,7 +11,7 @@ const App = FairyEditor.App;
 const previousRunInBackground = UnityEngine.Application.runInBackground;
 UnityEngine.Application.runInBackground = true;
 
-const BRIDGE_VERSION = "0.9.7";
+const BRIDGE_VERSION = "0.9.8";
 const PROTOCOL_VERSION = "1.0";
 const POLL_INTERVAL_FRAMES = 6;
 const STATUS_INTERVAL_FRAMES = 60;
@@ -73,7 +73,7 @@ let assetSnapshot = "";
 let pendingAssetSnapshot = "";
 let nextAssetScanAt = 0;
 let assetInputIdleSince = -1;
-// 只在请求结束或窗口重新获得焦点后安排一次恢复；心跳不触碰用户输入状态。
+// 请求结束、窗口重新获得焦点或外部资源刷新/画布重载后安排一次恢复；心跳不触碰输入状态。
 let inputRecoveryPending = false;
 let inputIdleSince = -1;
 const INPUT_RECOVERY_IDLE_SECONDS = 0.5;
@@ -366,6 +366,8 @@ function reloadChangedDocument(): void {
         || (doc.savedVersion === doc.packageItem.version && !doc.content.ValidateChildren(true)))
         return;
     doc.DiscardChanges();
+    // 画布会在资源刷新后的后续轮次重建；即使前一次输入恢复已执行，重载后也要重新等待键鼠空闲。
+    scheduleInputRecovery();
     clearAgentHistory();
 }
 
@@ -407,6 +409,8 @@ function refreshExternalAssetsWhenIdle(): void {
             return;
         }
         App.RefreshProject();
+        // 外部文件刷新由定时扫描触发，不经过请求完成回调。在原生刷新后接入相同的输入恢复。
+        scheduleInputRecovery();
         assetSnapshot = snapshot;
         pendingAssetSnapshot = "";
         appendLog("external assets refreshed automatically");
@@ -3118,7 +3122,7 @@ function recoverInputWhenIdle(): void {
     CS.FairyGUI.Stage.inst.ResetInputState();
     FairyEditor.ArrowKeyHelper.Reset();
     inputRecoveryPending = false;
-    appendLog("input state recovered after bridge request/focus");
+    appendLog("editor input state recovered");
 }
 
 function completeRequestSuccess(claimedPath: string, requestId: string, action: string, result: any): void {
