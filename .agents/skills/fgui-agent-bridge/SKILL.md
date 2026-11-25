@@ -43,14 +43,14 @@ description: 制作、组装和验收 FairyGUI UI（含通过 MCP/CLI 或直接�
 #### 全局插件预检
 
 - 操作任意 `.fairy` 工程前，先解析唯一目标工程，再检查当前用户全局插件 `~/.config/FairyGUI-Editor/plugins/agent-bridge/`，不能用另一个工程的 `plugins/agent-bridge/` 代替。
-- 全局插件缺失时，在独立 Bridge 根目录运行 `uv run python scripts/sync_to_project.py --global-plugin --apply`。版本不匹配时用同一命令更新，并重新启动 FairyGUI Editor。
+- 全局插件缺失时，在独立 Bridge 根目录运行 `uv run python scripts/sync_to_project.py --global-plugin --apply`。版本不匹配时用同一命令写入新版，提醒用户在方便时重新启动 FairyGUI Editor 加载。
 - 全局插件一次安装后服务所有工程；不要再为每个工程复制插件。遗留的同 ID 工程级副本应在确认全局插件可用后移除，避免重复注册菜单或轮询同一队列。
 - 重新启动后执行 `fgui_use_project → fgui_ping → fgui_get_project`；请求写入队列不代表编辑器已经连接成功。
 - `.agent/` 仍在当前 FairyGUI 工程内生成，只是运行时队列，不是插件安装目录，也不纳入 Git。
 
-1. 使用 `fgui_status` 查看当前会话是否已选择工程、编辑器是否在线、插件版本是否匹配以及心跳年龄；它不会唤醒编辑器。
+1. 先用 `fgui_status` 检查编辑器是否已运行（`editorRunning`）以及所选工程的心跳是否有效（`online`）。`editorRunning: null` 表示系统未能提供进程状态。尚未选择工程时也会报告进程状态。
 2. 工程未选择时调用 `fgui_use_project`，参数可为 `.fairy` 文件、FairyGUI 工程目录或包含 `FairyGUI/FairyGUI.fairy` 的仓库目录。
-3. 需要唤醒或验证编辑器时调用 `fgui_ping`。不要把“请求已写入队列”当作 FairyGUI 已完成。
+3. 用 `fgui_ping` 验证已有连接。编辑器已运行但工程心跳过期时，先核对已有窗口是否打开目标工程，再查插件和工程的 `.agent/bridge.log`。只有用户明确要求时才启动或切换编辑器。请求入队后以插件响应为准。
 4. 不知道包名时先 `fgui_list_packages`；不知道资源时用 `fgui_list_items`。
 5. 打开组件后先确认活动文档，再读取对象树。修改优先使用稳定对象 ID，其次对象路径；只有名称唯一时才使用名称。
 
@@ -240,7 +240,7 @@ git diff --check
 
 ## 安全边界
 
-- 0.9.3 在请求完成（含失败）或窗口重新获得焦点后安排一次输入状态恢复；仅在前台、真实按键和鼠标均松开且连续空闲 0.5 秒后调用宿主原生接口。不得改为每帧/每次心跳重置，也不得在用户拖动或按住修饰键时强制松键。心跳正常的慢请求不额外激活编辑器。该保护尚不等于已确认漏收 KeyUp 的根因，交付时区分宿主替身检查与真实编辑器验收。
+- 0.9.3 在请求完成（含失败）或窗口重新获得焦点后安排一次输入状态恢复；仅在前台、真实按键和鼠标均松开且连续空闲 0.5 秒后调用宿主原生接口。不得改为每帧/每次心跳重置，也不得在用户拖动或按住修饰键时强制松键。0.9.9 起 CLI 和 MCP 的连接和慢响应路径都不会启动或激活编辑器。该保护尚不等于已确认漏收 KeyUp 的根因，交付时区分宿主替身检查与真实编辑器验收。
 
 - `.agent/` 是目标 FairyGUI 工程的运行时队列与日志，不纳入 Git。
 - 同一请求不要重复写入；响应必须按请求 ID 匹配。

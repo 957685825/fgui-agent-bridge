@@ -14,7 +14,7 @@ from mcp.types import ImageContent, TextContent
 from . import __version__
 from .animation_models import TransitionDefinition, TransitionItem
 from .bridge_client import BridgeClient
-from .editor_launcher import EditorLauncher
+from .editor_process import EditorProcess
 from .project_locator import ProjectLocator
 from .layout_snapshot import encode_snapshot_png
 
@@ -43,8 +43,7 @@ mcp = FastMCP(
 mcp._mcp_server.version = __version__
 
 _locator = ProjectLocator()
-_launcher = EditorLauncher()
-_client = BridgeClient(_locator, _launcher)
+_client = BridgeClient(_locator)
 
 
 def configure_runtime(
@@ -53,10 +52,9 @@ def configure_runtime(
     editor: str | None = None,
     timeout: float = 10.0,
 ) -> None:
-    global _locator, _launcher, _client
+    global _locator, _client
     _locator = ProjectLocator(project)
-    _launcher = EditorLauncher(editor)
-    _client = BridgeClient(_locator, _launcher, timeout=timeout)
+    _client = BridgeClient(_locator, EditorProcess(editor), timeout=timeout)
 
 
 def _target(
@@ -93,13 +91,13 @@ def _resource_target(
 
 @mcp.tool()
 def fgui_status() -> dict[str, Any]:
-    """读取本地 FairyGUI 工程选择和桥接心跳，不主动唤醒编辑器。"""
+    """只读检测 FairyGUI Editor 是否运行，并分别报告所选工程的 Bridge 心跳。"""
     return _client.describe_status()
 
 
 @mcp.tool()
 def fgui_ping() -> dict[str, Any]:
-    """唤醒 FairyGUI Editor 并验证桥接协议、版本和能力。"""
+    """通过已打开的 FairyGUI Editor 验证所选工程的桥接协议、版本和能力。"""
     return _client.call("ping")
 
 
@@ -633,7 +631,7 @@ def fgui_discard_document() -> dict[str, Any]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=f"FairyGUI Agent Bridge MCP {__version__}")
     parser.add_argument("--project", help=".fairy 文件、FairyGUI 工程目录或仓库目录")
-    parser.add_argument("--editor", help="FairyGUI Editor .app 或可执行文件路径")
+    parser.add_argument("--editor", help="用于检测 FairyGUI Editor 进程的 .app 或可执行文件路径")
     parser.add_argument("--timeout", type=float, default=10.0, help="桥接命令超时秒数")
     return parser
 

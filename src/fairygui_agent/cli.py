@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .bridge_client import BridgeClient, BridgeError
-from .editor_launcher import EditorLauncher
+from .editor_process import EditorProcess
 from .project_locator import ProjectLocator
 from .layout_snapshot import encode_snapshot_png
 
@@ -45,11 +45,11 @@ def _add_target_arguments(parser: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="通过本地队列操作 FairyGUI Editor")
     parser.add_argument("--project", help=".fairy 文件、FairyGUI 工程目录或仓库目录")
-    parser.add_argument("--editor", help="FairyGUI Editor .app 或可执行文件路径")
+    parser.add_argument("--editor", help="用于检测 FairyGUI Editor 进程的 .app 或可执行文件路径")
     parser.add_argument("--timeout", type=float, default=10.0, help="命令超时秒数")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("status", help="读取本地桥接心跳，不主动唤醒编辑器")
+    subparsers.add_parser("status", help="读取编辑器进程状态和所选工程的 Bridge 心跳")
     subparsers.add_parser("ping", help="测试桥接连接")
     subparsers.add_parser("project", help="读取当前工程")
     subparsers.add_parser("packages", help="列出所有包")
@@ -267,7 +267,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     locator = ProjectLocator(args.project)
-    client = BridgeClient(locator, EditorLauncher(args.editor), timeout=args.timeout)
+    client = BridgeClient(locator, EditorProcess(args.editor), timeout=args.timeout)
 
     try:
         if args.command == "status":

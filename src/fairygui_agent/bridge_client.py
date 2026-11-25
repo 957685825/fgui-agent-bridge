@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 import uuid
@@ -11,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from . import PROTOCOL_VERSION, __version__
-from .editor_launcher import EditorLauncher
+from .editor_process import EditorProcess
 from .project_locator import ProjectContext, ProjectLocator
 
 REQUIRED_CAPABILITIES = frozenset(
@@ -91,21 +92,21 @@ class BridgeClient:
     def __init__(
         self,
         locator: ProjectLocator,
-        launcher: EditorLauncher | None = None,
+        editor_process: EditorProcess | None = None,
         *,
         timeout: float = 10.0,
         heartbeat_max_age: float = 5.0,
     ) -> None:
         self.locator = locator
-        self.launcher = launcher if launcher is not None else EditorLauncher()
+        self.editor_process = editor_process if editor_process is not None else EditorProcess()
         self.timeout = timeout
         self.heartbeat_max_age = heartbeat_max_age
 
     def project_context(self) -> ProjectContext:
         return self.locator.resolve()
 
-    def read_status(self) -> dict[str, Any] | None:
-        status_file = self.project_context().queue_root / "status.json"
+    def read_status(self, context: ProjectContext | None = None) -> dict[str, Any] | None:
+        status_file = (context or self.project_context()).queue_root / "status.json"
         if not status_file.exists():
             return None
         try:
@@ -115,20 +116,33 @@ class BridgeClient:
             return None
 
     def describe_status(self) -> dict[str, Any]:
-        context = self.project_context()
-        status = self.read_status()
+        # 即使还没选择工程，也要能检查宿主是否已打开。
+        running = self.editor_process.is_running()
+        context = None
+        project_error = None
+        try:
+            context = self.project_context()
+        except (RuntimeError, ValueError) as error:
+            project_error = str(error)
+
+        status_file = context.queue_root / "status.json" if context else None
+        status = self.read_status(context) if context else None
+        age = status_age(status)
         plugin_version = status.get("bridgeVersion") if status else None
         version_match = (plugin_version == __version__) if plugin_version else None
         result: dict[str, Any] = {
-            "project": context.as_dict(),
-            "statusFile": str(context.queue_root / "status.json"),
-            "heartbeatAgeSeconds": status_age(status),
-            "online": status is not None and status_age(status) <= self.heartbeat_max_age,
+            "project": context.as_dict() if context else None,
+            "statusFile": str(status_file) if status_file else None,
+            "editorRunning": running,
+            "heartbeatAgeSeconds": age if math.isfinite(age) else None,
+            "online": age <= self.heartbeat_max_age,
             "bridgeClientVersion": __version__,
             "pluginVersion": plugin_version,
             "versionMatch": version_match,
             "status": status,
         }
+        if project_error:
+            result["projectError"] = project_error
         if status and plugin_version and not version_match:
             result["updateWarning"] = (
                 f"编辑器插件版本 (v{plugin_version}) 与 Bridge 客户端版本 (v{__version__}) 不一致，"
@@ -155,37 +169,34 @@ class BridgeClient:
 
     def ensure_ready(self) -> dict[str, Any]:
         context = self.project_context()
-        status = self.read_status()
-        if status_age(status) <= self.heartbeat_max_age:
+        status = self.read_status(context)
+        if status is not None and status_age(status) <= self.heartbeat_max_age:
             self._validate_status(status)
             return status
 
-        self.launcher.wake(context.project_file)
-        activate_deadline = time.monotonic() + 2.0
-        while time.monotonic() < activate_deadline:
-            status = self.read_status()
-            if status_age(status) <= self.heartbeat_max_age:
-                self._validate_status(status)
-                return status
-            time.sleep(0.1)
-
-        self.launcher.wake(context.project_file, open_project=True)
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
-            status = self.read_status()
-            if status_age(status) <= self.heartbeat_max_age:
-                self._validate_status(status)
-                return status
-            time.sleep(0.1)
-
-        age = status_age(status)
-        if status is None:
+        running = self.editor_process.is_running()
+        if running is False:
             raise BridgeError(
-                f"未发现 {context.queue_root / 'status.json'}。请打开 {context.project_file}，"
+                f"未检测到 FairyGUI Editor 进程。请在编辑器中打开 {context.project_file}，"
                 "并确认 FGUI Agent Bridge 插件已加载。"
             )
+
+        # 用户已打开编辑器时，心跳仍可能在切工程或编辑器忙碌时暂时过期。
+        # 只等所选工程重新写入心跳，避免开新实例、切走用户窗口或提前提交写操作。
+        deadline = time.monotonic() + min(self.timeout, 5.0)
+        while time.monotonic() < deadline:
+            time.sleep(0.1)
+            status = self.read_status(context)
+            if status is not None and status_age(status) <= self.heartbeat_max_age:
+                self._validate_status(status)
+                return status
+
+        editor_state = "已检测到 FairyGUI Editor 进程" if running else "系统无法确认 FairyGUI Editor 进程状态"
+        age = status_age(status)
+        heartbeat_state = f"心跳距今 {age:.1f} 秒" if math.isfinite(age) else "缺少有效心跳"
         raise BridgeError(
-            f"FairyGUI Agent Bridge 心跳仍未恢复（{age:.1f} 秒）。请检查 FairyGUI 编辑器控制台。"
+            f"{editor_state}。所选工程 {context.project_file} 的 Bridge {heartbeat_state}，"
+            "请确认当前窗口打开的是该工程，并检查插件是否已加载。"
         )
 
     def call_raw(
@@ -230,8 +241,7 @@ class BridgeClient:
 
         call_timeout = self.timeout if timeout is None else timeout
         deadline = time.monotonic() + call_timeout
-        wake_again_at = time.monotonic() + min(1.0, call_timeout / 2)
-        woke_again = False
+        # 请求已经入队，心跳变旧时仍只等待这一次响应，避免重复触发操作。
         while time.monotonic() < deadline:
             if response_path.exists():
                 try:
@@ -241,11 +251,6 @@ class BridgeClient:
                 if not isinstance(response, dict):
                     raise BridgeError(f"FairyGUI 返回了无效响应：{action}")
                 return response
-            if not woke_again and time.monotonic() >= wake_again_at:
-                # 在线编辑器可能正在处理较慢的读取；只有心跳过期才唤醒，避免打断用户输入。
-                if status_age(self.read_status()) > self.heartbeat_max_age:
-                    self.launcher.wake(context.project_file)
-                woke_again = True
             time.sleep(0.05)
 
         request_path.unlink(missing_ok=True)

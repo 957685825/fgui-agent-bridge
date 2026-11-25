@@ -2,13 +2,17 @@
 
 通过 MCP (Model Context Protocol) 或 CLI，让 AI 编程 Agent（如 Cursor、Claude、Codex、VS Code 等）以结构化指令直接操作 FairyGUI Editor，实现自动拼 UI 界面、动效制作与一键发布。
 
-- **版本**：[`0.9.8`](https://github.com/957685825/fgui-agent-bridge/releases/tag/v0.9.8)
+- **版本**：[`0.9.9`](https://github.com/957685825/fgui-agent-bridge/releases/tag/v0.9.9)
 - **版本更新**：[完整更新记录](CHANGELOG.md) · [GitHub Releases](https://github.com/957685825/fgui-agent-bridge/releases)
 - **队列协议**：`1.0`
 - **已验证 FairyGUI Editor**：`6.1.4`
 - **通信方式**：本地 JSON 队列 + MCP stdio
 
 本仓库是由 `957685825` 持续维护的独立版本，基于 [Wilson520403 的原始工程](https://github.com/Wilson520403/fgui-agent-bridge)，保留原始 Git 历史和 MIT 许可证。这里的版本号只表示本维护分支，不代表已合并原仓库的全部后续功能。完整源码不压缩、不混淆，可直接修改和二次开发。
+
+### 连接已打开的编辑器（0.9.9）
+
+CLI 和 MCP 只连接用户已打开的 FairyGUI Editor。先运行 `status`（MCP 为 `fgui_status`）查看 `editorRunning` 和 `online`。前者是 macOS 或 Windows 的进程检测结果，受权限限制或无法检测时为 `null`。后者表示所选工程的插件心跳是否有效。已打开编辑器但心跳失效时，`ping` 和其他命令只短暂等待心跳恢复。连接和请求超时均不会启动编辑器、打开工程或抢占窗口焦点。
 
 ### 外部资源自动刷新（0.9.7）
 
@@ -34,7 +38,7 @@
 
 ### 编辑器输入状态保护（0.9.3）
 
-Bridge 请求成功、失败或编辑器重新获得焦点后，等待窗口在前台且真实按键/鼠标均松开并连续空闲 0.5 秒，再通过宿主原生接口恢复一次指针和方向键输入状态。恢复不保存文档、不切换文档、不修改组件或当前选择；按住修饰键、多选及拖动期间会等待。定时心跳不会触发恢复。客户端等待较慢响应时，心跳正常则不再额外激活编辑器。
+Bridge 请求成功、失败或编辑器重新获得焦点后，等待窗口在前台且真实按键/鼠标均松开并连续空闲 0.5 秒，再通过宿主原生接口恢复一次指针和方向键输入状态。恢复不保存文档、不切换文档、不修改组件或当前选择；按住修饰键、多选及拖动期间会等待。定时心跳不会触发恢复。客户端等待慢响应时只等待原请求。
 
 从 0.9.8 起，外部资源自动刷新和随后的画布重载也各自安排输入恢复，覆盖没有 Bridge 请求或窗口焦点事件的刷新流程。见 [0.9.8 故障说明、升级步骤和编辑器复测](CHANGELOG.md#098--2026-11-20)。
 
@@ -163,14 +167,14 @@ uv run python scripts/sync_to_project.py \
 
 #### 4. 验证连接
 
-启动 FairyGUI Editor 并打开目标工程，然后执行：
+确认 FairyGUI Editor 已打开目标工程。先执行以下命令查看状态：
 
 ```bash
 uv run --project /ABSOLUTE/PATH/TO/fgui-agent-bridge \
-  fgui-agent --project /ABSOLUTE/PATH/TO/FAIRYGUI-PROJECT ping
+  fgui-agent --project /ABSOLUTE/PATH/TO/FAIRYGUI-PROJECT status
 ```
 
-若返回 `{"status": "ok", ...}` 则表明连接成功。
+将 `status` 换成 `ping` 验证队列通信。若返回 `{"status": "ok", ...}` 则表明连接成功。
 
 ---
 
@@ -331,7 +335,7 @@ MCP instructions 需要重启对应 MCP 服务后重新加载；Skill 更新时�
 
 | 异常现象 | 可能原因 | 解决办法 |
 | :--- | :--- | :--- |
-| `ping` 提示超时或未连接 | 1. FairyGUI Editor 未启动<br>2. 目标工程未打开<br>3. 全局插件未安装或未生效 | 1. 打开 FairyGUI Editor 并加载目标工程；<br>2. 检查 `~/.config/FairyGUI-Editor/plugins/agent-bridge/main.js` 是否存在；<br>3. 重新启动 FairyGUI Editor；<br>4. 查看工程根目录 `.agent/bridge.log`。 |
+| `ping` 提示超时或未连接 | 查看 `status` 的 `editorRunning`、`online` 和工程路径 | `editorRunning: false` 时由用户打开编辑器。编辑器已运行时，先确认已有窗口打开目标工程，再检查全局插件和工程的 `.agent/bridge.log`。 |
 | MCP 客户端找不到工具 | 1. MCP 配置中的绝对路径填写错误<br>2. 客户端未重启会话 | 1. 检查 MCP 配置文件中的 `fgui-agent-bridge` 和工程绝对路径；<br>2. 新建 Agent 对话或重启 IDE 重新加载 MCP。 |
 | 导入资源失败 | 传入了相对路径或文件不存在 | 确保传入的图片/音频路径为**本地绝对路径**。 |
 | 发布操作阻塞超时 | 发布正在进行中或发生了并发请求 | 发布期间部分读写操作会被锁定，请勿并发调用发布；等待完成后检查发布日志。 |
